@@ -1,102 +1,121 @@
 // DOM elements
 const form = document.getElementById("contactForm");
-const optionCards = document.querySelectorAll(".option-card");
 const fileInput = document.getElementById("fileInput");
 const fileInfo = document.getElementById("fileInfo");
-const urlInput = document.getElementById("urlInput");
-const youtubeUrlField = document.getElementById("youtubeUrl");
 const successMessage = document.getElementById("successMessage");
 
-// Option selection logic
-optionCards.forEach((card) => {
-  card.addEventListener("click", () => {
-    // Remove selected class from all cards
-    optionCards.forEach((c) => c.classList.remove("selected"));
+// Webhook URL
+const WEBHOOK_URL = "https://aigent-staging.zuke.co.za/webhook/fbb44378-5d09-45f4-8393-19dbf91a317c";
 
-    // Add selected class to clicked card
-    card.classList.add("selected");
+// 🟢 Retrieve logged-in user's email (depending on your setup)
+let userEmail = null;
 
-    // Handle option-specific behavior
-    const option = card.dataset.option;
+// Option 1: from localStorage (most common)
+if (localStorage.getItem("userEmail")) {
+  userEmail = localStorage.getItem("userEmail");
+}
 
-    if (option === "file") {
-      urlInput.classList.remove("show");
-      youtubeUrlField.value = "";
-      youtubeUrlField.removeAttribute("required");
-    } else if (option === "url") {
-      urlInput.classList.add("show");
-      youtubeUrlField.setAttribute("required", "required");
-      fileInput.value = "";
-      fileInfo.textContent = "";
-    }
-  });
-});
+// Option 2: from sessionStorage (temporary login sessions)
+else if (sessionStorage.getItem("userEmail")) {
+  userEmail = sessionStorage.getItem("userEmail");
+}
 
-// File upload handling
+// Option 3: from a global variable (if your system injects it dynamically)
+else if (window.loggedInUserEmail) {
+  userEmail = window.loggedInUserEmail;
+}
+
+// Fallback
+if (!userEmail) {
+  console.warn("⚠️ No user email found — make sure to store it in localStorage or a global variable.");
+}
+
+// File input display
 fileInput.addEventListener("change", (e) => {
   const file = e.target.files[0];
   if (file) {
+    // Check if file is a video
+    if (!file.type.startsWith('video/')) {
+      alert("Please select a video file only.");
+      fileInput.value = "";
+      fileInfo.textContent = "";
+      return;
+    }
     fileInfo.textContent = `Selected: ${file.name} (${formatFileSize(file.size)})`;
-
-    // Auto-select file option when file is chosen
-    optionCards.forEach((c) => c.classList.remove("selected"));
-    document.querySelector('[data-option="file"]').classList.add("selected");
-    urlInput.classList.remove("show");
-    youtubeUrlField.value = "";
-    youtubeUrlField.removeAttribute("required");
   } else {
     fileInfo.textContent = "";
   }
 });
 
-// YouTube URL validation
-youtubeUrlField.addEventListener("input", (e) => {
-  const url = e.target.value;
-  if (url && isValidYouTubeUrl(url)) {
-    // Auto-select URL option when valid YouTube URL is entered
-    optionCards.forEach((c) => c.classList.remove("selected"));
-    document.querySelector('[data-option="url"]').classList.add("selected");
-    fileInput.value = "";
-    fileInfo.textContent = "";
-  }
-});
-
 // Form submission
-form.addEventListener("submit", (e) => {
+form.addEventListener("submit", async (e) => {
   e.preventDefault();
 
-  const formData = new FormData(form);
-  const selectedOption = document.querySelector(".option-card.selected");
-
-  // Validation
-  if (!selectedOption) {
-    alert("Please select either file upload or YouTube URL option.");
+  if (!fileInput.files[0]) {
+    alert("Please select a video file to upload.");
     return;
   }
 
-  const option = selectedOption.dataset.option;
+  try {
+    // 1. Upload file to Cloudinary first
+    console.log("Uploading to Cloudinary...");
+    const fileUrl = await uploadToCloudinary(fileInput.files[0]);
+    console.log("Cloudinary URL:", fileUrl);
 
-  if (option === "file" && !fileInput.files[0]) {
-    alert("Please select a file to upload.");
-    return;
+    // 2. Submit to your webhook with Cloudinary URL and user email
+    console.log("Submitting to webhook...");
+    const formData = new FormData();
+    formData.append("name", document.getElementById("name").value);
+    formData.append("notes", document.getElementById("notes").value);
+    formData.append("fileUrl", fileUrl);
+
+    // 🟢 Add user email automatically
+    if (userEmail) {
+      formData.append("email", userEmail);
+    }
+
+    const response = await fetch(WEBHOOK_URL, {
+      method: "POST",
+      body: formData
+    });
+
+    console.log("Webhook response status:", response.status);
+
+    if (response.ok) {
+      const responseData = await response.json();
+      console.log("Webhook submission successful:", responseData);
+      showSuccess();
+    } else {
+      const errorText = await response.text();
+      console.error("Webhook error:", errorText);
+      throw new Error(`Webhook returned status ${response.status}`);
+    }
+
+  } catch (err) {
+    console.error("Error:", err);
+    alert("There was an error processing your submission. Please try again.");
   }
-
-  if (option === "url" && !youtubeUrlField.value) {
-    alert("Please enter a YouTube URL.");
-    return;
-  }
-
-  if (option === "url" && !isValidYouTubeUrl(youtubeUrlField.value)) {
-    alert("Please enter a valid YouTube URL.");
-    return;
-  }
-
-  // Simulate form submission
-  showSuccess();
-
-  // In a real application, you would send the data to a server:
-  // submitFormData(formData, option);
 });
+
+// Upload helper function
+async function uploadToCloudinary(file) {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("upload_preset", "unsigned_preset"); // Replace with your preset
+
+  const response = await fetch("https://api.cloudinary.com/v1_1/dl0u8tzae/upload", {
+    method: "POST",
+    body: formData
+  });
+
+  const data = await response.json();
+
+  if (data.secure_url) {
+    return data.secure_url;
+  } else {
+    throw new Error("Cloudinary upload failed");
+  }
+}
 
 // Helper functions
 function formatFileSize(bytes) {
@@ -107,46 +126,11 @@ function formatFileSize(bytes) {
   return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + " " + sizes[i];
 }
 
-function isValidYouTubeUrl(url) {
-  const youtubeRegex =
-    /^(https?:\/\/)?(www\.)?(youtube\.com\/(watch\?v=|embed\/)|youtu\.be\/)[\w-]+/;
-  return youtubeRegex.test(url);
-}
-
 function showSuccess() {
   successMessage.style.display = "block";
-
   setTimeout(() => {
     successMessage.style.display = "none";
     form.reset();
-    optionCards.forEach((c) => c.classList.remove("selected"));
-    urlInput.classList.remove("show");
     fileInfo.textContent = "";
-    youtubeUrlField.removeAttribute("required");
   }, 3000);
-}
-
-// Real form submission function (for server integration)
-// Replace the existing submitFormData function with this:
-function submitFormData(formData, option) {
-  // Add the selected option to form data
-  formData.append("option", option);
-
-  fetch("http://localhost:3001/submit-form", {
-    method: "POST",
-    body: formData,
-  })
-    .then((response) => response.json())
-    .then((data) => {
-      if (data.success) {
-        console.log("Success:", data);
-        showSuccess();
-      } else {
-        throw new Error(data.error || "Submission failed");
-      }
-    })
-    .catch((error) => {
-      console.error("Error:", error);
-      alert("There was an error submitting the form. Please try again.");
-    });
 }
